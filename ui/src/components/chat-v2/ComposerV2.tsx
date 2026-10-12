@@ -38,6 +38,9 @@ import type {
 import { MAX_ATTACHMENTS_ERROR_KEY } from "../chat/hooks/useChatComposerState";
 import PermissionRequestsBanner from "../chat/view/subcomponents/PermissionRequestsBanner";
 import ImageAttachment from "../chat/view/subcomponents/ImageAttachment";
+import { useUploadedAttachmentPreviews } from "../chat/hooks/useUploadedAttachmentPreviews";
+import { uploadedPreviewKey } from "../chat/utils/uploadedAttachmentPreview";
+import type { ComposerAttachment } from "../chat/utils/composerAttachmentDrafts";
 import CommandMenu from "../chat/view/subcomponents/CommandMenu";
 import { cn } from "../../lib/utils.js";
 import type { ContentReference } from "../../types/contentReference";
@@ -106,15 +109,15 @@ export type ComposerV2Props = {
   onAbortSession: () => void;
   openImagePicker: () => void;
   onAddAttachmentFiles: (files: File[]) => void;
-  attachedImages: File[];
-  onRemoveImage: (index: number) => void;
-  onRetryImage: (file: File) => void;
+  attachedImages: ComposerAttachment[];
+  onRemoveImage: (id: string) => void;
+  onRetryImage: (id: string) => void;
   documentReferences: ContentReference[];
   onRemoveDocumentReference: (id: string) => void;
   onOpenDocumentReference?: (filePath: string) => void;
-  uploadingImages: Map<File, number>;
+  uploadingImages: Map<string, number>;
   hasPendingAttachments?: boolean;
-  imageErrors: Map<File | string, string>;
+  imageErrors: Map<string, string>;
 
   showFileDropdown: boolean;
   fileMentionQuery: string;
@@ -647,6 +650,28 @@ export default function ComposerV2({
   );
   const hasUploadingImages = [...uploadingImages.values()].some((percent) => percent < 100);
   const attachmentLimitError = imageErrors.get(MAX_ATTACHMENTS_ERROR_KEY);
+  // Slots restored after a reload have no local File; load their thumbnails
+  // through the upload preview API like sent attachments do.
+  const restoredAttachmentPreviewTargets = useMemo(
+    () => attachedImages.flatMap((attachment) => (
+      !attachment.file && attachment.upload && attachment.mimeType.startsWith("image/")
+        ? [{
+            name: attachment.name,
+            uploadId: attachment.upload.uploadId,
+            attachmentId: attachment.upload.attachmentId,
+            mimeType: attachment.mimeType,
+          }]
+        : []
+    )),
+    [attachedImages],
+  );
+  const restoredAttachmentPreviews = useUploadedAttachmentPreviews(restoredAttachmentPreviewTargets);
+  const restoredPreviewByKey = useMemo(
+    () => new Map(restoredAttachmentPreviews.flatMap((preview) => (
+      preview.previewData ? [[uploadedPreviewKey(preview), preview.previewData] as const] : []
+    ))),
+    [restoredAttachmentPreviews],
+  );
   const modelBlocksSubmission = !isModelSelectionReady && !canSubmitWithoutModel;
   const disabled = !hasDraftContent || isSubmitPending || hasPendingAttachments || hasUploadingImages || modelBlocksSubmission || !isPermissionModeReady;
   const primaryAction = getComposerPrimaryAction({
@@ -853,14 +878,17 @@ export default function ComposerV2({
                       onRemove={() => onRemoveDocumentReference(reference.id)}
                     />
                   ))}
-                  {attachedImages.map((file, index) => (
+                  {attachedImages.map((attachment) => (
                     <ImageAttachment
-                      key={index}
-                      file={file}
-                      onRemove={() => onRemoveImage(index)}
-                      onRetry={() => onRetryImage(file)}
-                      uploadProgress={uploadingImages.get(file)}
-                      error={imageErrors.get(file)}
+                      key={attachment.id}
+                      attachment={attachment}
+                      previewSrc={attachment.upload
+                        ? restoredPreviewByKey.get(uploadedPreviewKey(attachment.upload))
+                        : undefined}
+                      onRemove={() => onRemoveImage(attachment.id)}
+                      onRetry={() => onRetryImage(attachment.id)}
+                      uploadProgress={uploadingImages.get(attachment.id)}
+                      error={imageErrors.get(attachment.id)}
                     />
                   ))}
                 </div>

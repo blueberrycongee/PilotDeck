@@ -41,6 +41,8 @@ type UploadAttachmentBatchOptions = {
   signal: AbortSignal;
   fetcher?: UploadFetcher;
   idempotencyKey?: string;
+  /** Stable per-file identities. The server echoes each one as attachmentId. */
+  clientFileIds?: string[];
   onCreated?: (uploadId: string) => void;
   onStatus?: (record: AttachmentUploadRecord) => void;
 };
@@ -127,11 +129,12 @@ export async function uploadAttachmentBatch({
   signal,
   fetcher = authenticatedFetch,
   idempotencyKey = randomId(),
+  clientFileIds,
   onCreated,
   onStatus,
 }: UploadAttachmentBatchOptions): Promise<AttachmentUploadResult> {
   const manifest = files.map((file, index) => ({
-    clientFileId: `file-${index}-${randomId()}`,
+    clientFileId: clientFileIds?.[index] || `file-${index}-${randomId()}`,
     name: file.name,
     relativePath: file.webkitRelativePath || file.name,
     size: file.size,

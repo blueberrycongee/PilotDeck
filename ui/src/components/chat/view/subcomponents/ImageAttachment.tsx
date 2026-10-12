@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { ComposerAttachment } from '../../utils/composerAttachmentDrafts';
 
 const MIME_FRIENDLY_LABELS: Record<string, string> = {
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'DOCX',
@@ -19,20 +20,22 @@ const MIME_FRIENDLY_LABELS: Record<string, string> = {
   'application/xml': 'XML',
 };
 
-function getFileTypeLabel(file: File): string {
-  const ext = file.name.includes('.') ? file.name.split('.').pop()?.toUpperCase() : undefined;
-  if (ext && ext !== file.name.toUpperCase()) return ext;
-  const friendly = MIME_FRIENDLY_LABELS[file.type.toLowerCase()];
+function getFileTypeLabel(name: string, mimeType: string): string {
+  const ext = name.includes('.') ? name.split('.').pop()?.toUpperCase() : undefined;
+  if (ext && ext !== name.toUpperCase()) return ext;
+  const friendly = MIME_FRIENDLY_LABELS[mimeType.toLowerCase()];
   if (friendly) return friendly;
-  if (file.type.includes('/')) {
-    const sub = file.type.split('/').pop() || '';
+  if (mimeType.includes('/')) {
+    const sub = mimeType.split('/').pop() || '';
     if (sub.length <= 10 && !sub.includes('.')) return sub.toUpperCase();
   }
   return 'FILE';
 }
 
 interface ImageAttachmentProps {
-  file: File;
+  attachment: ComposerAttachment;
+  /** Server preview for slots restored after a reload (no local File). */
+  previewSrc?: string;
   onRemove: () => void;
   onRetry?: () => void;
   uploadProgress?: number;
@@ -40,33 +43,39 @@ interface ImageAttachmentProps {
 }
 
 const ImageAttachment = ({
-  file,
+  attachment,
+  previewSrc,
   onRemove,
   onRetry,
   uploadProgress,
   error,
 }: ImageAttachmentProps) => {
   const { t } = useTranslation('chat');
-  const [preview, setPreview] = useState<string | undefined>(undefined);
-  const isImage = file.type.startsWith('image/');
-  
+  const { file, name, mimeType } = attachment;
+  const [localPreview, setLocalPreview] = useState<string | undefined>(undefined);
+  const isImage = mimeType.startsWith('image/');
+
   useEffect(() => {
-    if (!isImage) {
-      setPreview(undefined);
+    if (!isImage || !file) {
+      setLocalPreview(undefined);
       return;
     }
     const url = URL.createObjectURL(file);
-    setPreview(url);
+    setLocalPreview(url);
     return () => URL.revokeObjectURL(url);
   }, [file, isImage]);
-  
+
+  const preview = localPreview || previewSrc || attachment.upload?.previewData;
+  // A restored image renders as a file card until its server preview loads.
+  const showImage = isImage && Boolean(file || preview);
+
   const isUploadComplete = uploadProgress !== undefined && uploadProgress >= 100 && !error;
   const showProgressOverlay = uploadProgress !== undefined && uploadProgress < 100 && !error;
 
   return (
     <div className="group relative">
-      {isImage ? (
-        <img src={preview} alt={file.name} className="h-20 w-20 rounded object-cover" />
+      {showImage ? (
+        <img src={preview} alt={name} className="h-20 w-20 rounded object-cover" />
       ) : (
         <div className="flex h-20 w-44 items-center gap-2 rounded border border-neutral-200 bg-white p-2 text-neutral-900 shadow-sm dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300">
@@ -76,9 +85,9 @@ const ImageAttachment = ({
             </svg>
           </div>
           <div className="min-w-0">
-            <div className="truncate text-xs font-medium">{file.name}</div>
+            <div className="truncate text-xs font-medium">{name}</div>
             <div className="mt-0.5 text-[11px] uppercase text-neutral-500">
-              {getFileTypeLabel(file)}
+              {getFileTypeLabel(name, mimeType)}
             </div>
           </div>
         </div>
@@ -114,7 +123,7 @@ const ImageAttachment = ({
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
           </svg>
           <span className="line-clamp-2 text-[10px]" title={error}>{error}</span>
-          {onRetry ? (
+          {onRetry && file ? (
             <button
               type="button"
               onClick={onRetry}
@@ -130,8 +139,8 @@ const ImageAttachment = ({
         onClick={onRemove}
         className="absolute -right-2 -top-2 rounded-full bg-red-500 p-1 text-white opacity-100 transition-opacity focus:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
         aria-label={uploadProgress !== undefined && uploadProgress < 100
-          ? t('input.cancelUpload', { file: file.name, defaultValue: `Cancel upload ${file.name}` })
-          : t('input.removeAttachment', { file: file.name, defaultValue: `Remove attachment ${file.name}` })}
+          ? t('input.cancelUpload', { file: name, defaultValue: `Cancel upload ${name}` })
+          : t('input.removeAttachment', { file: name, defaultValue: `Remove attachment ${name}` })}
       >
         <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />

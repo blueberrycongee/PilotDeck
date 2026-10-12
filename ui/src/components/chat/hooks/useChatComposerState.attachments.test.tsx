@@ -3,6 +3,7 @@ import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useChatComposerState } from './useChatComposerState';
 import { cachedUploadedPreview } from '../utils/uploadedAttachmentPreview';
+import { resetComposerAttachmentDraftsForTests } from '../utils/composerAttachmentDrafts';
 
 const mocks = vi.hoisted(() => ({
   authenticatedFetch: vi.fn(),
@@ -36,6 +37,8 @@ describe('useChatComposerState attachment submission', () => {
 
   afterEach(() => {
     cleanup();
+    resetComposerAttachmentDraftsForTests();
+    localStorage.clear();
     vi.clearAllMocks();
     vi.restoreAllMocks();
   });
@@ -284,33 +287,19 @@ describe('useChatComposerState attachment submission', () => {
     );
   });
 
-  it('cancels a shared batch and sends only the attachment that remains selected', async () => {
-    let uploadCall = 0;
-    mocks.uploadAttachmentBatch.mockImplementation(async ({ files, signal, onCreated }: any) => {
-      uploadCall += 1;
-      const currentCall = uploadCall;
-      onCreated?.(currentCall === 1 ? 'upload-old' : 'upload-new');
-      if (currentCall === 1) {
-        await new Promise<void>((resolve) => {
-          signal.addEventListener('abort', () => resolve(), { once: true });
-        });
-        return {
-          uploadId: 'upload-old',
-          attachmentIds: ['attachment-a', 'attachment-b-old'],
-          attachments: files.map((file: File, index: number) => ({
-            attachmentId: index === 0 ? 'attachment-a' : 'attachment-b-old',
-            name: file.name,
-            relativePath: `.tmp/chat-uploads/upload-old/${file.name}`,
-          })),
-        };
-      }
+  it('keeps sibling uploads running and sends only the attachment that remains selected', async () => {
+    let finishUpload!: () => void;
+    const uploadGate = new Promise<void>((resolve) => { finishUpload = resolve; });
+    mocks.uploadAttachmentBatch.mockImplementation(async ({ files, clientFileIds, onCreated }: any) => {
+      onCreated?.('upload-shared');
+      await uploadGate;
       return {
-        uploadId: 'upload-new',
-        attachmentIds: ['attachment-b'],
-        attachments: files.map((file: File) => ({
-          attachmentId: 'attachment-b',
+        uploadId: 'upload-shared',
+        attachmentIds: clientFileIds,
+        attachments: files.map((file: File, index: number) => ({
+          attachmentId: clientFileIds[index],
           name: file.name,
-          relativePath: `.tmp/chat-uploads/upload-new/${file.name}`,
+          relativePath: `.tmp/chat-uploads/upload-shared/${file.name}`,
           bytes: file.size,
           mimeType: file.type,
         })),
@@ -354,28 +343,25 @@ describe('useChatComposerState attachment submission', () => {
       result.current.addAttachmentFiles([first, second]);
     });
     await waitFor(() => expect(result.current.attachedImages).toHaveLength(2));
+    const [firstSlot, secondSlot] = result.current.attachedImages;
 
-    let submitting!: Promise<void>;
-    act(() => {
-      submitting = result.current.handleSubmit({ preventDefault: vi.fn() } as never);
-    });
-    act(() => result.current.removeAttachedImage(0));
-    await waitFor(() => expect(mocks.uploadAttachmentBatch).toHaveBeenCalledTimes(2));
-    await submitting;
-    await waitFor(() => expect(result.current.hasPendingAttachments).toBe(false));
+    await act(async () => { await result.current.handleSubmit({ preventDefault: vi.fn() } as never); });
     expect(sendMessage).not.toHaveBeenCalled();
+    act(() => result.current.removeAttachedImage(firstSlot.id));
+    await act(async () => { finishUpload(); });
+    await waitFor(() => expect(result.current.hasPendingAttachments).toBe(false));
+    expect(result.current.attachedImages.map((attachment) => attachment.id)).toEqual([secondSlot.id]);
     await act(async () => { await result.current.handleSubmit({ preventDefault: vi.fn() } as never); });
 
-    expect(mocks.cancelAttachmentUpload).toHaveBeenCalledWith('upload-old');
-    expect(mocks.uploadAttachmentBatch).toHaveBeenCalledTimes(2);
-    expect(mocks.uploadAttachmentBatch.mock.calls[1][0].files).toEqual([second]);
+    expect(mocks.cancelAttachmentUpload).not.toHaveBeenCalled();
+    expect(mocks.uploadAttachmentBatch).toHaveBeenCalledTimes(1);
     expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({
       options: expect.objectContaining({
-        uploadedAttachments: [{ uploadId: 'upload-new', attachmentIds: ['attachment-b'] }],
+        uploadedAttachments: [{ uploadId: 'upload-shared', attachmentIds: [secondSlot.id] }],
       }),
     }));
     expect(addMessage).toHaveBeenCalledWith(expect.objectContaining({
-      attachments: [expect.objectContaining({ name: 'b.txt', uploadId: 'upload-new' })],
+      attachments: [expect.objectContaining({ name: 'b.txt', uploadId: 'upload-shared' })],
     }), null);
   });
 
