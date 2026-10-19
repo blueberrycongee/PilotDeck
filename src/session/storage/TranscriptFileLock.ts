@@ -1,6 +1,7 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { setTimeout } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
+import { dirname } from "node:path";
 
 const openWriters = new Map<string, number>();
 
@@ -19,6 +20,7 @@ export function hasOpenTranscriptWriter(path: string): boolean {
 
 /** Shared by append, replacement and maintenance, including separate PD processes. */
 export async function withTranscriptFileLock<T>(path: string, action: () => Promise<T>): Promise<T> {
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const lockPath = `${path}.storage-lock`;
   const owner = `${process.pid}:${randomUUID()}`;
   const deadline = Date.now() + 30_000;
