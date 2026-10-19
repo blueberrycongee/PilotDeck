@@ -80,9 +80,15 @@ export class SmoothTextStream {
 
   append(text: string): void {
     if (!text) return;
+    const now = this.now();
+    if (this.lastChunkAtMs != null && now > this.lastChunkAtMs) {
+      this.averageCharsPerSecond = smooth(this.averageCharsPerSecond, text.length * 1000 / (now - this.lastChunkAtMs));
+    }
+    this.lastChunkAtMs = now;
     this.targetContent += text;
     if (!this.paused) {
-      this.schedulePump();
+      if (!this.renderedContent) this.emitInitialContent();
+      if (this.renderedContent.length < this.targetContent.length) this.schedulePump();
     }
   }
 
@@ -170,9 +176,7 @@ export class SmoothTextStream {
     if (this.options.scheduleFrame) {
       return this.options.scheduleFrame(callback);
     }
-    // Use setTimeout(16ms) for frame-rate independent pumping at ~60fps.
-    // rAF fires at display Hz (120 on modern Macs) making text too fast.
-    return window.setTimeout(callback, 16) as unknown as FrameHandle;
+    return window.requestAnimationFrame(callback);
   }
 
   private cancelFrame(handle: FrameHandle): void {
@@ -180,7 +184,7 @@ export class SmoothTextStream {
       this.options.cancelFrame(handle);
       return;
     }
-    window.clearTimeout(handle as unknown as number);
+    window.cancelAnimationFrame(handle);
   }
 
   private cancelScheduledFrame(): void {
@@ -215,15 +219,15 @@ export class SmoothTextStream {
       if (this.frame == null) return;
       this.cancelFrame(this.frame);
       this.frame = null;
-      this.pump();
+      this.pump(true);
     }, this.options.fallbackFrameMs ?? DEFAULT_FALLBACK_FRAME_MS);
   }
 
   private emitInitialContent(): void {
-    // Let pump() handle all rendering uniformly to avoid burst-then-pause
+    this.pump(true);
   }
 
-  private pump(): void {
+  private pump(force = false): void {
     this.frame = null;
     this.cancelFallbackTimer();
 
@@ -242,13 +246,20 @@ export class SmoothTextStream {
       return;
     }
 
-    // 2 chars/pump at 60 pumps/sec = 120 cps (frame-rate independent).
-    // Draining mode: 15 chars/pump for a smooth-but-quick finish.
-    // 15 chars × 60fps = ~900 chars/sec, so 150 chars finishes in ~170ms.
-    const chars = this.draining ? Math.min(15, remaining) : Math.min(2, remaining);
-    const nextLength = Math.min(
-      this.targetContent.length,
-      this.renderedContent.length + chars,
+    const now = this.now();
+    // Display refresh rate must not change the configured text cadence.
+    if (!force && this.lastFrameAtMs != null && now - this.lastFrameAtMs < this.frameMs) {
+      this.schedulePump();
+      return;
+    }
+    this.lastFrameAtMs = now;
+    const start = this.renderedContent.length;
+    const chars = this.getCharsForFrame(remaining);
+    const nextLength = findBoundary(
+      this.targetContent,
+      start + Math.min(this.minCharsPerFrame, remaining),
+      start + chars,
+      start + Math.min(this.maxCharsPerFrame, remaining),
     );
 
     this.renderedContent = this.targetContent.slice(0, nextLength);
