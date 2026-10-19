@@ -26,7 +26,9 @@ these overrides as direct dependencies adopt patched versions themselves.
 
 ## Validation
 
-Use Node 22 and the frozen pnpm lockfile. The root and UI TypeScript checks and
-`pnpm run build:web` pass with this dependency graph. Existing runtime and Web
-regression suites exercise the updated consumers. Registry advisories change over
-time, so rerun `pnpm audit --prod --json` when reviewing or merging this branch.
+Use Node 22 and the frozen pnpm lockfile. In the combined verification checkout,
+the root and UI TypeScript checks, `pnpm run build:web`, and existing runtime/Web
+regression suites passed with this dependency graph. This independent dependency
+branch retains the pre-existing UI React type conflict; its fix is isolated in
+`fix/bug-12-react-type-isolation`. Registry advisories change over time, so rerun
+`pnpm audit --prod --json` when reviewing or merging this branch.
