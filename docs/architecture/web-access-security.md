@@ -23,9 +23,3 @@ comma-separated origins in `PILOTDECK_ALLOWED_ORIGINS`, for example
 `https://dashboard.example.com`. This setting does not expand password-free local
 access. Reverse proxies should preserve the public Host header. If `API_KEY` is
 configured, WebSocket clients must also supply `X-API-Key`, as HTTP API clients do.
-
-TaskMaster PRD operations resolve registered projects and constrain filenames to
-`.md` and `.txt` files inside `.taskmaster/docs`. Command loading and execution
-read Markdown only from the active PilotDeck home's `commands`/`skills` roots or
-those of registered projects. Both boundaries resolve filesystem paths and reject
-symlink escapes; choosing an arbitrary absolute path does not register a project.
