@@ -1,3 +1,4 @@
+import { startSessionStorageMaintenance } from "../session/storage/SessionStorageMaintenance.js";
 import type { ExplicitModelSelection } from "../gateway/protocol/types.js";
 import { isOptionalFeatureEnabled } from "../pilot/config/optionalFeature.js";
 import { resolveWebSearchConfig } from "../pilot/config/webSearchConfig.js";
@@ -668,11 +669,13 @@ export function createLocalGateway(options: CreateLocalGatewayOptions = {}): Cre
   // build a `GatewayElicitationChannel` against this gateway's bus +
   // emit-sink (B1).
   registry.setGateway(gateway);
+  const stopSessionStorageMaintenance = startSessionStorageMaintenance(pilotHome);
   return {
     gateway,
     configStore,
     registry,
     dispose: () => {
+      stopSessionStorageMaintenance();
       registry.invalidate();
       router?.shutdown();
       stopConfigWatching();

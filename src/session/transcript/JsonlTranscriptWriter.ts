@@ -1,3 +1,4 @@
+import { registerTranscriptWriter, withTranscriptFileLock } from "../storage/TranscriptFileLock.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, appendFile, open } from "node:fs/promises";
 import { basename, dirname, join, relative } from "node:path";
@@ -44,7 +45,6 @@ export class JsonlTranscriptWriter implements AgentTranscriptWriter {
   private closed = false;
   private writeChain: Promise<void> = Promise.resolve();
   private lastEntryId: string | null = null;
-  private tailPrepared = false;
   private readonly now: () => Date;
 
   constructor(private readonly options: JsonlTranscriptWriterOptions) {
@@ -75,7 +75,7 @@ export class JsonlTranscriptWriter implements AgentTranscriptWriter {
     messages: CanonicalMessage[],
     metadata?: Record<string, unknown>,
   ): Promise<void> {
-    return this.recordEntry({
+    return this.enqueueEntry({
       type: "accepted_input",
       ...this.baseEntry(sessionId, turnId),
       messages,
@@ -85,7 +85,7 @@ export class JsonlTranscriptWriter implements AgentTranscriptWriter {
 
   recordDurableMessage(sessionId: string, turnId: string, message: CanonicalMessage): Promise<void> {
     const type: AgentMessageTranscriptEntry["type"] = classifyDurableMessageEntry(message);
-    return this.recordEntry({
+    return this.enqueueEntry({
       type,
       ...this.baseEntry(sessionId, turnId),
       message,
@@ -97,7 +97,7 @@ export class JsonlTranscriptWriter implements AgentTranscriptWriter {
     turnId: string,
     status: { event: string; kind: "status" | "error"; text: string; detail?: Record<string, unknown> },
   ): Promise<void> {
-    return this.recordEntry({
+    return this.enqueueEntry({
       type: "agent_status_message",
       ...this.baseEntry(sessionId, turnId),
       event: status.event,
@@ -109,7 +109,7 @@ export class JsonlTranscriptWriter implements AgentTranscriptWriter {
 
   recordFileArtifacts(sessionId: string, turnId: string, artifacts: FileArtifact[]): Promise<void> {
     if (artifacts.length === 0) return Promise.resolve();
-    return this.recordEntry({
+    return this.enqueueEntry({
       type: "file_artifacts",
       ...this.baseEntry(sessionId, turnId),
       artifacts,
@@ -117,7 +117,7 @@ export class JsonlTranscriptWriter implements AgentTranscriptWriter {
   }
 
   recordTurnResult(sessionId: string, turnId: string, result: AgentTurnResult): Promise<void> {
-    return this.recordEntry({
+    return this.enqueueEntry({
       type: "turn_result",
       ...this.baseEntry(sessionId, turnId),
       result,
@@ -125,7 +125,7 @@ export class JsonlTranscriptWriter implements AgentTranscriptWriter {
   }
 
   recordSessionMetadata(sessionId: string, turnId: string, metadata: SessionMetadataValue): Promise<void> {
-    return this.recordEntry({
+    return this.enqueueEntry({
       type: "session_metadata",
       ...this.baseEntry(sessionId, turnId),
       metadata,
@@ -137,7 +137,7 @@ export class JsonlTranscriptWriter implements AgentTranscriptWriter {
     turnId: string,
     boundary: AgentControlBoundaryTranscriptEntry["boundary"],
   ): Promise<void> {
-    return this.recordEntry({
+    return this.enqueueEntry({
       type: "control_boundary",
       ...this.baseEntry(sessionId, turnId),
       boundary,
@@ -150,25 +150,36 @@ export class JsonlTranscriptWriter implements AgentTranscriptWriter {
   }
 
   recordEntry(entry: AgentTranscriptEntry): Promise<void> {
-    if (this.closed) return Promise.resolve();
-    // Capture the whole record before queued IO, so callers cannot mutate a
-    // replacement snapshot while an earlier append is still pending.
-    const line = `${JSON.stringify(entry)}\n`;
-    const flush = entry.type === "control_boundary" &&
-      (entry.boundary.kind === "restore" || (entry.boundary.kind === "compact" && entry.boundary.subtype === "compact_boundary"));
-    this.sequence = Math.max(this.sequence, entry.sequence);
-    this.lastEntryId = entry.entryId ?? this.lastEntryId;
-    this.writeChain = this.writeChain.then(async () => {
-      if (this.closed) return;
-      await mkdir(dirname(this.options.path), { recursive: true, mode: 0o700 });
-      await this.prepareTail();
-      await appendFile(this.options.path, line, { encoding: "utf8", mode: 0o600, flush });
-    });
-    return this.writeChain;
+    // Imported snapshots retain their explicit identities and sequence values.
+    return this.enqueueEntry(entry, false);
   }
 
-  private async prepareTail(): Promise<void> {
-    if (this.tailPrepared) return;
+  private enqueueEntry(entry: AgentTranscriptEntry, allocateIdentity = true): Promise<void> {
+    if (this.closed) return Promise.resolve();
+    const captured = JSON.stringify(entry);
+    const release = registerTranscriptWriter(this.options.path);
+    const operation = this.writeChain.then(async () => {
+      await mkdir(dirname(this.options.path), { recursive: true, mode: 0o700 });
+      await withTranscriptFileLock(this.options.path, async () => {
+        const tail = await this.prepareTail();
+        const record = JSON.parse(captured) as AgentTranscriptEntry;
+        if (allocateIdentity) {
+          record.sequence = Math.max(this.sequence, tail.sequence) + 1;
+          record.parentEntryId = tail.lastEntryId ?? this.lastEntryId;
+        }
+        const flush = record.type === "control_boundary" &&
+          (record.boundary.kind === "restore" || (record.boundary.kind === "compact" && record.boundary.subtype === "compact_boundary"));
+        await appendFile(this.options.path, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600, flush });
+        this.sequence = Math.max(this.sequence, record.sequence);
+        this.lastEntryId = record.entryId ?? this.lastEntryId;
+      });
+    }).finally(release);
+    // Report this append's failure to its caller without poisoning later writes.
+    this.writeChain = operation.catch(() => undefined);
+    return operation;
+  }
+
+  private async prepareTail(): Promise<AgentTranscriptWriterState> {
     const file = await open(this.options.path, "a+", 0o600);
     try {
       const { size } = await file.stat();
@@ -181,7 +192,31 @@ export class JsonlTranscriptWriter implements AgentTranscriptWriter {
           await file.appendFile("\n");
         }
       }
-      this.tailPrepared = true;
+      // Read identity from the physical tail while holding the same lock used
+      // for append/replacement. Encoded records keep these fields in plain JSON.
+      let position = size;
+      let suffix = Buffer.alloc(0);
+      while (position > 0) {
+        const length = Math.min(position, 64 * 1024);
+        position -= length;
+        const buffer = Buffer.alloc(length);
+        await file.read(buffer, 0, length, position);
+        const data = Buffer.concat([buffer, suffix]);
+        const start = position === 0 ? 0 : data.indexOf(0x0a) + 1;
+        if (start > 0 || position === 0) {
+          const lines = data.subarray(start).toString("utf8").split("\n");
+          for (let index = lines.length - 1; index >= 0; index--) {
+            try {
+              const record = JSON.parse(lines[index]);
+              if (Number.isSafeInteger(record.sequence) && record.sequence >= 0) {
+                return { sequence: record.sequence, lastEntryId: typeof record.entryId === "string" ? record.entryId : null };
+              }
+            } catch { /* Ignore crash debris, retaining it for diagnostics. */ }
+          }
+        }
+        suffix = start > 0 ? data.subarray(0, start - 1) : data;
+      }
+      return { sequence: 0, lastEntryId: null };
     } finally {
       await file.close();
     }
@@ -214,7 +249,7 @@ export class JsonlTranscriptWriter implements AgentTranscriptWriter {
       transcriptRelativePath: args.transcriptRelativePath,
       subagentSessionId: args.subagentSessionId,
     };
-    return this.recordEntry(entry);
+    return this.enqueueEntry(entry);
   }
 
   /** C3.S1 — record the parent-side `subagent_completed` reference. */
@@ -244,7 +279,7 @@ export class JsonlTranscriptWriter implements AgentTranscriptWriter {
       durationMs: args.durationMs,
       errored: args.errored,
     };
-    return this.recordEntry(entry);
+    return this.enqueueEntry(entry);
   }
 
   /**
@@ -279,7 +314,7 @@ export class JsonlTranscriptWriter implements AgentTranscriptWriter {
     return {
       sessionId,
       turnId,
-      sequence: ++this.sequence,
+      sequence: 0,
       createdAt: this.now().toISOString(),
       entryId: randomUUID(),
       parentEntryId: this.lastEntryId,

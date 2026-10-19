@@ -1,3 +1,4 @@
+import { parseTranscriptLine } from "./TranscriptStorageCodec.js";
 import { readFile, stat } from "node:fs/promises";
 import type { AgentTranscriptDiagnostic, AgentTranscriptEntry } from "./TranscriptEntry.js";
 
@@ -49,6 +50,7 @@ export async function readTranscript(path: string, options: ReadTranscriptOption
   const entries: AgentTranscriptEntry[] = [];
   const diagnostics: AgentTranscriptDiagnostic[] = [];
   const lines = content.split(/\r?\n/);
+  let decodedBytes = 0;
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
     if (!line.trim()) {
@@ -56,7 +58,11 @@ export async function readTranscript(path: string, options: ReadTranscriptOption
     }
 
     try {
-      const parsed = JSON.parse(line) as unknown;
+      const parsed = parseTranscriptLine(line) as unknown;
+      decodedBytes += Buffer.byteLength(JSON.stringify(parsed));
+      if (decodedBytes > (options.maxBytes ?? DEFAULT_MAX_TRANSCRIPT_READ_BYTES)) {
+        return { entries: [], diagnostics: [{ code: "transcript_too_large", severity: "error", message: `Decoded transcript ${path} exceeds the read limit.` }] };
+      }
       if (isTranscriptEntry(parsed)) {
         entries.push(parsed);
       } else {

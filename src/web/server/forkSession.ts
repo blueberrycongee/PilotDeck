@@ -8,6 +8,7 @@
 
 import { randomUUID } from "node:crypto";
 import type { Dirent } from "node:fs";
+import { parseTranscriptLine } from "../../session/transcript/TranscriptStorageCodec.js";
 import { chmod, cp, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { platform } from "node:process";
@@ -405,7 +406,7 @@ async function retargetCopiedSubagentTranscripts(
           return line;
         }
         try {
-          const parsed = JSON.parse(line) as AgentTranscriptEntry;
+          const parsed = parseTranscriptLine(line) as AgentTranscriptEntry;
           return JSON.stringify(
             retargetTranscriptEntryAuxiliaryPaths(parsed, sourceSessionDir, targetSessionDir),
           );

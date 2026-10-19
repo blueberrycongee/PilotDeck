@@ -37,6 +37,7 @@
  * handshake for `GATEWAY_CONNECT_TIMEOUT_MS` while Gateway is starting.
  */
 
+import { parseTranscriptLine } from '../../src/session/transcript/TranscriptStorageCodec.js';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -2861,7 +2862,7 @@ function _readUserQueriesFromTranscript(sessionId, projectKey, limit) {
             for (const line of raw.split('\n')) {
                 if (!line.trim()) continue;
                 try {
-                    const entry = JSON.parse(line);
+                    const entry = parseTranscriptLine(line);
                     if (entry.type !== 'accepted_input') continue;
                     const text = entry.messages
                         ?.flatMap(m => m.content ?? [])
@@ -2942,7 +2943,7 @@ function _readToolSequenceFromTranscript(sessionId, projectKey) {
             for (const line of raw.split('\n')) {
                 if (!line.trim()) continue;
                 try {
-                    const entry = JSON.parse(line);
+                    const entry = parseTranscriptLine(line);
                     if (entry.type === 'accepted_input') {
                         currentTurn = { tools: [], modelCalls: 0 };
                         turns.push(currentTurn);
@@ -3028,7 +3029,7 @@ function _readSubagentPromptsFromTranscript(sessionId, projectKey) {
             for (const line of raw.split('\n')) {
                 if (!line.trim()) continue;
                 try {
-                    const entry = JSON.parse(line);
+                    const entry = parseTranscriptLine(line);
                     if (entry.type === 'subagent_started' && entry.turnId && entry.promptPreview) {
                         const list = promptsByTurn.get(entry.turnId) || [];
                         const preview = entry.promptPreview.length > 80
