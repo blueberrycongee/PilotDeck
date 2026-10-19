@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import { userDb, appConfigDb } from '../database/db.js';
-import { IS_PLATFORM, DISABLE_LOCAL_AUTH } from '../constants/config.js';
+import { DISABLE_LOCAL_AUTH } from '../constants/config.js';
+import { isTrustedLocalRequest } from '../utils/requestSecurity.js';
 
 // Use env var if set, otherwise auto-generate a unique secret per installation
 const JWT_SECRET = process.env.JWT_SECRET || appConfigDb.getOrCreateJwtSecret();
@@ -41,8 +42,9 @@ function extractDashboardRefererToken(req) {
 
 // JWT authentication middleware
 const authenticateToken = async (req, res, next) => {
-  // Platform mode:  use single database user
-  if (IS_PLATFORM || DISABLE_LOCAL_AUTH) {
+  // Password-free access is confined to trusted local requests.
+  if (DISABLE_LOCAL_AUTH) {
+    if (!isTrustedLocalRequest(req)) return res.status(403).json({ error: 'Local access required' });
     try {
       const user = userDb.getFirstUser();
       if (!user) {
@@ -115,20 +117,6 @@ const generateToken = (user) => {
 
 // WebSocket authentication function
 const authenticateWebSocket = (token) => {
-  // Platform mode: bypass token validation, return first user
-  if (IS_PLATFORM || DISABLE_LOCAL_AUTH) {
-    try {
-      const user = userDb.getFirstUser();
-      if (user) {
-        return { id: user.id, userId: user.id, username: user.username };
-      }
-      return null;
-    } catch (error) {
-      console.error('Platform mode WebSocket error:', error);
-      return null;
-    }
-  }
-
   // Normal OSS JWT validation
   if (!token) {
     return null;
