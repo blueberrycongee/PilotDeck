@@ -25,12 +25,13 @@ export async function maintainSessionStorage(options: {
   const days = options.idleDays ?? 30;
   if (!Number.isFinite(days) || days <= 0) throw new Error("idleDays must be positive");
   const maxFiles = options.maxFiles ?? 32;
-  if (!Number.isSafeInteger(maxFiles) || maxFiles <= 0) throw new Error("maxFiles must be a positive integer");
+  if (maxFiles !== Number.POSITIVE_INFINITY && (!Number.isSafeInteger(maxFiles) || maxFiles <= 0)) throw new Error("maxFiles must be a positive integer or Infinity");
   const cursorPath = join(options.pilotHome, ".session-storage-cursor.json");
-  const cursor = options.dryRun ? "" : await readFile(cursorPath, "utf8").catch(() => "");
+  const useCursor = !options.dryRun && Number.isFinite(maxFiles);
+  const cursor = useCursor ? await readFile(cursorPath, "utf8").catch(() => "") : "";
   let lastScanned = "";
   const saveCursor = async (value: string): Promise<void> => {
-    if (options.dryRun) return;
+    if (!useCursor) return;
     const temporary = `${cursorPath}.${randomUUID()}.tmp`;
     try {
       await writeFile(temporary, value, { mode: 0o600 });
