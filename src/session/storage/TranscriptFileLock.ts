@@ -1,10 +1,12 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { setTimeout } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
+import { resolve } from "node:path";
 
 const openWriters = new Map<string, number>();
 
 export function registerTranscriptWriter(path: string): () => void {
+  path = resolve(path);
   openWriters.set(path, (openWriters.get(path) ?? 0) + 1);
   return () => {
     const count = (openWriters.get(path) ?? 1) - 1;
@@ -14,7 +16,7 @@ export function registerTranscriptWriter(path: string): () => void {
 }
 
 export function hasOpenTranscriptWriter(path: string): boolean {
-  return openWriters.has(path);
+  return openWriters.has(resolve(path));
 }
 
 /** Shared by append, replacement and maintenance, including separate PD processes. */

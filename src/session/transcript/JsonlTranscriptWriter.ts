@@ -47,11 +47,9 @@ export class JsonlTranscriptWriter implements AgentTranscriptWriter {
   private lastEntryId: string | null = null;
   private tailPrepared = false;
   private readonly now: () => Date;
-  private releaseStorageWriter?: () => void;
 
   constructor(private readonly options: JsonlTranscriptWriterOptions) {
     this.now = options.now ?? (() => new Date());
-    this.releaseStorageWriter = registerTranscriptWriter(options.path);
   }
 
   /**
@@ -150,8 +148,6 @@ export class JsonlTranscriptWriter implements AgentTranscriptWriter {
   async close(): Promise<void> {
     this.closed = true;
     await this.writeChain.catch(() => undefined);
-    this.releaseStorageWriter?.();
-    this.releaseStorageWriter = undefined;
   }
 
   recordEntry(entry: AgentTranscriptEntry): Promise<void> {
@@ -163,6 +159,7 @@ export class JsonlTranscriptWriter implements AgentTranscriptWriter {
       (entry.boundary.kind === "restore" || (entry.boundary.kind === "compact" && entry.boundary.subtype === "compact_boundary"));
     this.sequence = Math.max(this.sequence, entry.sequence);
     this.lastEntryId = entry.entryId ?? this.lastEntryId;
+    const release = registerTranscriptWriter(this.options.path);
     this.writeChain = this.writeChain.then(async () => {
       if (this.closed) return;
       await mkdir(dirname(this.options.path), { recursive: true, mode: 0o700 });
@@ -170,7 +167,7 @@ export class JsonlTranscriptWriter implements AgentTranscriptWriter {
         await this.prepareTail();
         await appendFile(this.options.path, line, { encoding: "utf8", mode: 0o600, flush });
       });
-    });
+    }).finally(release);
     return this.writeChain;
   }
 
