@@ -15,7 +15,9 @@ vi.mock('../../../constants/config', () => ({
 
 vi.mock('../../../utils/api', () => ({
   api: {
-    auth: {},
+    auth: {
+      status: vi.fn(async () => ({ ok: true, json: async () => ({ authDisabled: true, token: 'local-token', user: { username: 'local' } }) })),
+    },
     user: {
       onboardingStatus: mocks.onboardingStatus,
       runtimeStatus: mocks.runtimeStatus,

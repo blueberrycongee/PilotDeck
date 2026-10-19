@@ -147,7 +147,8 @@ import { runtimeCoordination } from './services/runtimeCoordination.js';
 
 import { runServerStartupBeforeListen, startServerAfterStartup } from './services/server-startup.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
-import { DISABLE_LOCAL_AUTH, IS_PLATFORM } from './constants/config.js';
+import { DISABLE_LOCAL_AUTH, WEB_HOST } from './constants/config.js';
+import { isAllowedBrowserRequest } from './utils/requestSecurity.js';
 import { getConnectableHost } from '../shared/networkHosts.js';
 import { contentDispositionAttachment } from './utils/downloadHeaders.js';
 import { createSessionWatchRegistry } from './session-watch-registry.js';
@@ -456,17 +457,8 @@ const wss = new WebSocketServer({
         // Log only the path: the query string carries the auth token.
         console.log('WebSocket connection attempt to:', info.req.url?.split('?')[0]);
 
-        // Platform / no-login mode: allow connection without token
-        if (IS_PLATFORM || DISABLE_LOCAL_AUTH) {
-            const user = authenticateWebSocket(null); // Returns first DB user
-            if (!user) {
-                console.log('[WARN] WebSocket auth bypass: No user found in database');
-                return false;
-            }
-            info.req.user = user;
-            console.log('[OK] WebSocket authenticated (bypass) for user:', user.username);
-            return true;
-        }
+        if (!isAllowedBrowserRequest(info.req, DISABLE_LOCAL_AUTH)) return false;
+        if (process.env.API_KEY && info.req.headers['x-api-key'] !== process.env.API_KEY) return false;
 
         // Normal mode: verify token
         // Extract token from query parameters or headers
@@ -491,7 +483,13 @@ const wss = new WebSocketServer({
 // Make WebSocket server available to routes
 app.locals.wss = wss;
 
-app.use(cors({ exposedHeaders: ['X-Refreshed-Token'] }));
+app.use((req, res, next) => {
+    if (!isAllowedBrowserRequest(req, DISABLE_LOCAL_AUTH)) {
+        return res.status(403).json({ error: 'Request origin or local address is not allowed' });
+    }
+    next();
+});
+app.use(cors({ origin: true, exposedHeaders: ['X-Refreshed-Token'] }));
 app.use(express.json({
     limit: '50mb',
     type: (req) => {
@@ -3555,7 +3553,7 @@ async function getFileTree(dirPath, maxDepth = 3, currentDepth = 0, showHidden =
 }
 
 const SERVER_PORT = process.env.SERVER_PORT || 3001;
-const HOST = process.env.HOST || '0.0.0.0';
+const HOST = WEB_HOST;
 const DISPLAY_HOST = getConnectableHost(HOST);
 const VITE_PORT = process.env.VITE_PORT || 5173;
 

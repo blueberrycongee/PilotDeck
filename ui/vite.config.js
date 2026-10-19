@@ -16,7 +16,7 @@ export default defineConfig(({ mode }) => {
     ...process.env,
   }
 
-  const configuredHost = env.HOST || '0.0.0.0'
+  const configuredHost = env.HOST || '127.0.0.1'
   // if the host is not a loopback address, it should be used directly. 
   // This allows the vite server to EXPOSE all interfaces when the host 
   // is set to '0.0.0.0' or '::', while still using 'localhost' for browser 

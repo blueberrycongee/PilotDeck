@@ -3,6 +3,7 @@ import bcrypt from 'bcrypt';
 import { userDb, db } from '../database/db.js';
 import { generateToken, authenticateToken } from '../middleware/auth.js';
 import { DISABLE_LOCAL_AUTH } from '../constants/config.js';
+import { isTrustedLocalRequest } from '../utils/requestSecurity.js';
 
 const router = express.Router();
 
@@ -10,10 +11,16 @@ const router = express.Router();
 router.get('/status', async (req, res) => {
   try {
     if (DISABLE_LOCAL_AUTH) {
+      if (!isTrustedLocalRequest(req)) return res.status(403).json({ error: 'Local access required' });
+      const user = userDb.getFirstUser();
+      if (!user) return res.status(503).json({ error: 'Local user is not ready' });
+      res.setHeader('Cache-Control', 'no-store');
       return res.json({
         needsSetup: false,
         isAuthenticated: true,
         authDisabled: true,
+        user: { id: user.id, username: user.username },
+        token: generateToken(user),
       });
     }
     const hasUsers = await userDb.hasUsers();
