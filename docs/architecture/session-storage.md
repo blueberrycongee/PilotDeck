@@ -1,9 +1,11 @@
 # Cold session storage
 
 The Gateway checks for cold transcripts one minute after startup and every six
-hours thereafter. Files unchanged for 30 days are eligible. Each pass compresses
-at most 32 files, skips writers open in that Gateway, and skips pending turn
-replacement transactions. Main transcripts and subagent sidechains are included.
+hours thereafter. Files unchanged for 30 days are eligible. Each background pass
+scans at most 32 files and saves a cursor so later passes reach the rest. It skips
+writers open in that Gateway and pending turn replacement transactions. Main
+transcripts and subagent sidechains are included. Fingerprints skip unchanged
+files already examined, avoiding repeated full-file compression work.
 
 History remains JSONL at its original path. Large assistant/tool messages and
 context snapshots use a `pilotdeck-gzip-v1` payload; record identity stays plain.
@@ -35,7 +37,9 @@ pilotdeck session compact --pilot-home /path/to/pilot-home --dry-run
 ```
 
 Commands print JSON with file counts, before/after bytes and failures. Dry-run
-calculates compression without rewriting history. Background work is cancelled
+calculates compression without rewriting history or maintenance state. Manual
+commands scan all files; their unlimited budget does not use the background cursor.
+Background work is cancelled
 when its Gateway is disposed.
 
 All processes reading a shared PilotDeck home must support this encoding before

@@ -1,4 +1,4 @@
-import { lstat, open, readdir, rename, rm, utimes } from "node:fs/promises";
+import { lstat, open, readdir, readFile, writeFile, rename, rm, utimes } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 import { basename, dirname, join } from "node:path";
@@ -24,6 +24,20 @@ export async function maintainSessionStorage(options: {
 }): Promise<SessionStorageMaintenanceResult> {
   const days = options.idleDays ?? 30;
   if (!Number.isFinite(days) || days <= 0) throw new Error("idleDays must be positive");
+  const maxFiles = options.maxFiles ?? 32;
+  if (maxFiles !== Number.POSITIVE_INFINITY && (!Number.isSafeInteger(maxFiles) || maxFiles <= 0)) throw new Error("maxFiles must be a positive integer or Infinity");
+  const cursorPath = join(options.pilotHome, ".session-storage-cursor.json");
+  const useCursor = !options.dryRun && Number.isFinite(maxFiles);
+  const cursor = useCursor ? await readFile(cursorPath, "utf8").catch(() => "") : "";
+  let lastScanned = "";
+  const saveCursor = async (value: string): Promise<void> => {
+    if (!useCursor) return;
+    const temporary = `${cursorPath}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temporary, value, { mode: 0o600 });
+      await rename(temporary, cursorPath);
+    } finally { await rm(temporary, { force: true }); }
+  };
   const cutoff = Date.now() - days * 86_400_000;
   const result: SessionStorageMaintenanceResult = { scanned: 0, compressed: 0, bytesBefore: 0, bytesAfter: 0, failures: [] };
   const projects = join(options.pilotHome, "projects");
@@ -31,11 +45,16 @@ export async function maintainSessionStorage(options: {
     if (error.code === "ENOENT") return [];
     throw error;
   });
-  for (const project of projectDirs) {
+  for (const project of projectDirs.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) {
     if (!project.isDirectory()) continue;
     const chats = join(projects, project.name, "chats");
     for await (const path of transcriptFiles(chats)) {
-      if (options.signal?.aborted || result.compressed >= (options.maxFiles ?? 32)) return result;
+      if (path <= cursor) continue;
+      if (options.signal?.aborted || result.scanned >= maxFiles) {
+        await saveCursor(lastScanned || cursor);
+        return result;
+      }
+      lastScanned = path;
       result.scanned++;
       try {
         if (hasOpenTranscriptWriter(path)) continue;
@@ -45,6 +64,12 @@ export async function maintainSessionStorage(options: {
           if (hasOpenTranscriptWriter(path)) return;
           const before = await lstat(path);
           if (!before.isFile() || before.mtimeMs > cutoff || before.size !== initial.size || before.mtimeMs !== initial.mtimeMs) return;
+          const markerPath = `${path}.storage-state.json`;
+          const fingerprint = (stat: typeof before): string => JSON.stringify([1, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs]);
+          if (await readFile(markerPath, "utf8").catch(() => "") === fingerprint(before)) return;
+          const markProcessed = async (): Promise<void> => {
+            if (!options.dryRun) await writeFile(markerPath, fingerprint(await lstat(path)), { mode: 0o600 });
+          };
           // A prepared edit owns the history until commit/rollback completes.
           const names = await readdir(dirname(path));
           const name = basename(path, ".jsonl");
@@ -64,7 +89,10 @@ export async function maintainSessionStorage(options: {
               bytesAfter += Buffer.byteLength(data);
               if (output) await output.writeFile(data);
             }
-            if (!changed || bytesAfter >= before.size) return;
+            if (!changed || bytesAfter >= before.size) {
+              await markProcessed();
+              return;
+            }
             if (output) {
               await output.sync();
               await output.close();
@@ -73,6 +101,7 @@ export async function maintainSessionStorage(options: {
               if (current.ino !== before.ino || current.size !== before.size || current.mtimeMs !== before.mtimeMs) return;
               await rename(temporary, path);
             }
+            await markProcessed();
             result.compressed++;
             result.bytesBefore += before.size;
             result.bytesAfter += bytesAfter;
@@ -84,11 +113,15 @@ export async function maintainSessionStorage(options: {
           }
         });
       } catch (error) {
-        if (options.signal?.aborted) return result;
+        if (options.signal?.aborted) {
+          await saveCursor(lastScanned);
+          return result;
+        }
         result.failures.push({ path, message: error instanceof Error ? error.message : String(error) });
       }
     }
   }
+  if (projectDirs.length > 0) await saveCursor("");
   return result;
 }
 
@@ -97,7 +130,8 @@ async function* transcriptFiles(directory: string): AsyncGenerator<string> {
     if (error.code === "ENOENT") return [];
     throw error;
   });
-  for (const entry of entries) {
+  const sortKey = (entry: typeof entries[number]): string => entry.name + (entry.isDirectory() ? "/" : "");
+  for (const entry of entries.sort((a, b) => sortKey(a) < sortKey(b) ? -1 : sortKey(a) > sortKey(b) ? 1 : 0)) {
     if (entry.isFile() && entry.name.endsWith(".jsonl")) yield join(directory, entry.name);
     // Session sidechains live at chats/<session>/subagents/*.jsonl.
     if (entry.isDirectory() && !entry.name.endsWith(".storage-lock")) {
@@ -106,7 +140,7 @@ async function* transcriptFiles(directory: string): AsyncGenerator<string> {
         if (error.code === "ENOENT") return [];
         throw error;
       });
-      for (const child of children) if (child.isFile() && child.name.endsWith(".jsonl")) yield join(subagents, child.name);
+      for (const child of children.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) if (child.isFile() && child.name.endsWith(".jsonl")) yield join(subagents, child.name);
     }
   }
 }
