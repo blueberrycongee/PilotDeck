@@ -675,7 +675,9 @@ export class InProcessGateway implements Gateway {
               gatewayEvent.modelSelection = { ...input.modelSelection };
             }
             if (gatewayEvent.type === "context_budget") {
-              this.recordGatewayStatusMessage({
+              // Drain transcript writes with the turn pump so session disposal
+              // or replacement cannot race a detached status append.
+              await this.recordGatewayStatusMessage({
                 sessionKey: input.sessionKey,
                 turnId: runId,
                 projectKey: input.projectKey,
@@ -685,7 +687,7 @@ export class InProcessGateway implements Gateway {
                   text: "context_budget",
                   detail: { ...gatewayEvent },
                 },
-              }).catch(() => {});
+              });
             }
             this.recordActiveTurnEvent(input.sessionKey, gatewayEvent);
             queue.enqueue(gatewayEvent);
