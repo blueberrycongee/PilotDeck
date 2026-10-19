@@ -1,3 +1,4 @@
+import { registerTranscriptWriter, withTranscriptFileLock } from "../storage/TranscriptFileLock.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, appendFile, open } from "node:fs/promises";
 import { basename, dirname, join, relative } from "node:path";
@@ -46,9 +47,11 @@ export class JsonlTranscriptWriter implements AgentTranscriptWriter {
   private lastEntryId: string | null = null;
   private tailPrepared = false;
   private readonly now: () => Date;
+  private releaseStorageWriter?: () => void;
 
   constructor(private readonly options: JsonlTranscriptWriterOptions) {
     this.now = options.now ?? (() => new Date());
+    this.releaseStorageWriter = registerTranscriptWriter(options.path);
   }
 
   /**
@@ -147,6 +150,8 @@ export class JsonlTranscriptWriter implements AgentTranscriptWriter {
   async close(): Promise<void> {
     this.closed = true;
     await this.writeChain.catch(() => undefined);
+    this.releaseStorageWriter?.();
+    this.releaseStorageWriter = undefined;
   }
 
   recordEntry(entry: AgentTranscriptEntry): Promise<void> {
@@ -161,8 +166,10 @@ export class JsonlTranscriptWriter implements AgentTranscriptWriter {
     this.writeChain = this.writeChain.then(async () => {
       if (this.closed) return;
       await mkdir(dirname(this.options.path), { recursive: true, mode: 0o700 });
-      await this.prepareTail();
-      await appendFile(this.options.path, line, { encoding: "utf8", mode: 0o600, flush });
+      await withTranscriptFileLock(this.options.path, async () => {
+        await this.prepareTail();
+        await appendFile(this.options.path, line, { encoding: "utf8", mode: 0o600, flush });
+      });
     });
     return this.writeChain;
   }

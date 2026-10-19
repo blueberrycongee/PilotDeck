@@ -1,3 +1,4 @@
+import { parseTranscriptLine } from "../transcript/TranscriptStorageCodec.js";
 import { createReadStream } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -310,7 +311,7 @@ async function searchSessionFile(
 
     let entry: Record<string, unknown>;
     try {
-      entry = JSON.parse(line) as Record<string, unknown>;
+      entry = parseTranscriptLine(line) as Record<string, unknown>;
     } catch {
       continue;
     }

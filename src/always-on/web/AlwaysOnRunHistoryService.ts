@@ -7,6 +7,7 @@
  * helper so the module stays decoupled from ui/server specifics.
  */
 
+import { parseTranscriptLine } from "../../session/transcript/TranscriptStorageCodec.js";
 import { promises as fs } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { homedir } from "node:os";
@@ -137,7 +138,7 @@ async function readJsonlEntries(filePath: string): Promise<Array<Record<string, 
     .filter((line) => line.trim())
     .map((line) => {
       try {
-        return JSON.parse(line) as Record<string, unknown>;
+        return parseTranscriptLine(line) as Record<string, unknown>;
       } catch {
         return null;
       }
