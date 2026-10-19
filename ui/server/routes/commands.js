@@ -10,7 +10,8 @@ import { parseFrontmatter } from '../utils/frontmatter.js';
 import { getClaudeRuntimeModelConfig, getClaudeRuntimeModelValues } from '../utils/claude-runtime-config.js';
 import { readPilotDeckConfigFile, resolveModel } from '../services/pilotdeckConfig.js';
 import { resolvePilotHome } from '../utils/pilotPaths.js';
-import { isPathInsideOrEqual } from '../utils/pathSafety.js';
+import { isPathInsideOrEqual, resolvePathWithinRoot } from '../utils/pathSafety.js';
+import { readRegisteredProject } from '../services/projectRegistration.js';
 import { executeTurnkeySlashCommand } from '../turnkey-slash.js';
 import { getRegisteredCommands } from '../../../src/adapters/channel/protocol/ChannelCommandRegistry.js';
 import { runChatSearchFormatted } from '../../../src/cli/commands/chatSearch.js';
@@ -22,6 +23,35 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const router = express.Router();
+
+async function resolveCommandPath(commandPath) {
+  const denied = () => Object.assign(new Error('Command must be in a registered commands or skills directory'), { status: 403 });
+  if (typeof commandPath !== 'string' || !commandPath.endsWith('.md')) throw denied();
+  const candidate = path.resolve(commandPath);
+  const pilotHome = resolvePilotHome(process.env);
+  const anchors = [{ root: pilotHome, prefix: pilotHome }];
+  const projectsDir = path.join(pilotHome, 'projects');
+  const projects = await fs.readdir(projectsDir, { withFileTypes: true }).catch(error => {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  });
+  for (const project of projects) {
+    if (!project.isDirectory()) continue;
+    const root = await readRegisteredProject(projectsDir, project.name);
+    if (root) anchors.push({ root, prefix: path.join(root, '.pilotdeck') });
+  }
+  for (const { root, prefix } of anchors) {
+    for (const subdir of ['commands', 'skills']) {
+      const base = path.join(prefix, subdir);
+      if (candidate === base || !isPathInsideOrEqual(base, candidate)) continue;
+      const canonicalBase = await resolvePathWithinRoot(root, base);
+      const canonicalFile = await resolvePathWithinRoot(root, candidate);
+      if (!isPathInsideOrEqual(canonicalBase, canonicalFile)) throw denied();
+      return canonicalFile;
+    }
+  }
+  throw denied();
+}
 
 /**
  * Slash commands curated to always appear at the top of the menu in this exact
@@ -955,19 +985,8 @@ router.post('/load', async (req, res) => {
       });
     }
 
-    // Security: Prevent path traversal. Allow paths under any
-    const resolvedPath = path.resolve(commandPath);
-    const inHome = resolvedPath.startsWith(path.resolve(os.homedir()));
-    const inPilotdeckSubdir = /\.pilotdeck\/(commands|skills)\//.test(resolvedPath);
-    if (!inHome && !inPilotdeckSubdir) {
-      return res.status(403).json({
-        error: 'Access denied',
-        message: 'Command must be in a .pilotdeck/commands or .pilotdeck/skills directory'
-      });
-    }
-
-    // Read and parse the command file
-    const content = await fs.readFile(commandPath, 'utf8');
+    const resolvedPath = await resolveCommandPath(commandPath);
+    const content = await fs.readFile(resolvedPath, 'utf8');
     const { data: metadata, content: commandContent } = parseFrontmatter(content);
 
     res.json({
@@ -976,6 +995,7 @@ router.post('/load', async (req, res) => {
       content: commandContent
     });
   } catch (error) {
+    if (error.status === 403) return res.status(403).json({ error: 'Access denied', message: error.message });
     if (error.code === 'ENOENT') {
       return res.status(404).json({
         error: 'Command not found',
@@ -1077,30 +1097,8 @@ router.post('/execute', async (req, res) => {
       });
     }
 
-    // Load command content
-    // Security: validate commandPath is within allowed directories.
-    {
-      const resolvedPath = path.resolve(commandPath);
-      const pilotHome = resolvePilotHome(process.env);
-      const allowedBases = [
-        path.resolve(path.join(pilotHome, 'commands')),
-        path.resolve(path.join(pilotHome, 'skills')),
-      ];
-      if (context?.projectPath) {
-        allowedBases.push(
-          path.resolve(path.join(context.projectPath, '.pilotdeck', 'commands')),
-          path.resolve(path.join(context.projectPath, '.pilotdeck', 'skills')),
-        );
-      }
-      const isUnder = (base) => isPathInsideOrEqual(base, resolvedPath) && path.resolve(base) !== resolvedPath;
-      if (!allowedBases.some(isUnder)) {
-        return res.status(403).json({
-          error: 'Access denied',
-          message: 'Command must be in a .pilotdeck/commands or .pilotdeck/skills directory'
-        });
-      }
-    }
-    const content = await fs.readFile(commandPath, 'utf8');
+    const resolvedPath = await resolveCommandPath(commandPath);
+    const content = await fs.readFile(resolvedPath, 'utf8');
     const { data: metadata, content: commandContent } = parseFrontmatter(content);
     // Basic argument replacement (will be enhanced in command parser utility)
     let processedContent = commandContent;
@@ -1124,6 +1122,7 @@ router.post('/execute', async (req, res) => {
       hasBashCommands: processedContent.includes('!')
     });
   } catch (error) {
+    if (error.status === 403) return res.status(403).json({ error: 'Access denied', message: error.message });
     if (error.code === 'ENOENT') {
       return res.status(404).json({
         error: 'Command not found',

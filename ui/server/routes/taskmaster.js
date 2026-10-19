@@ -16,7 +16,10 @@ import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import os from 'os';
-import { extractProjectDirectory } from '../projects.js';
+import { resolveRegisteredProject } from '../services/projectRegistration.js';
+import { resolvePilotHome } from '../utils/pilotPaths.js';
+import { isPathInsideOrEqual, resolvePathWithinRoot } from '../utils/pathSafety.js';
+
 import { detectTaskMasterMCPServer } from '../utils/mcp-detector.js';
 import { broadcastTaskMasterProjectUpdate, broadcastTaskMasterTasksUpdate } from '../utils/taskmaster-websocket.js';
 import { prepareCliSpawn } from '../utils/processSpawn.js';
@@ -24,7 +27,29 @@ import { prepareCliSpawn } from '../utils/processSpawn.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+const extractProjectDirectory = (name) => resolveRegisteredProject(name, resolvePilotHome(process.env));
 const router = express.Router();
+
+// All PRD operations share the same registration and canonical path boundary.
+router.use(['/prd/:projectName/:fileName', '/prd/:projectName', '/parse-prd/:projectName', '/apply-template/:projectName'], async (req, res, next) => {
+    try {
+        const root = await fsPromises.realpath(await extractProjectDirectory(req.params.projectName));
+        const docs = await resolvePathWithinRoot(root, path.join(root, '.taskmaster', 'docs'), { allowMissing: true });
+        const fileName = req.params.fileName ?? req.body?.fileName ?? (/\/(parse-prd|apply-template)\//.test(req.baseUrl) ? 'prd.txt' : undefined);
+        req.prdDocsPath = docs;
+        if (fileName !== undefined) {
+            if (typeof fileName !== 'string' || !/^[\w\-. ]+\.(txt|md)$/.test(fileName)) {
+                return res.status(400).json({ error: 'Invalid PRD filename' });
+            }
+            const file = await resolvePathWithinRoot(root, path.join(docs, fileName), { allowMissing: true });
+            if (!isPathInsideOrEqual(docs, file)) return res.status(403).json({ error: 'PRD file is outside the docs directory' });
+            req.prdFilePath = req.method === 'DELETE' ? path.join(docs, fileName) : file;
+        }
+        next();
+    } catch (error) {
+        res.status(error.status || (error.code === 'ENOENT' ? 404 : 500)).json({ error: error.message });
+    }
+});
 
 function spawnCli(command, args, options = {}) {
     const prepared = prepareCliSpawn(command, args, options);
@@ -702,7 +727,7 @@ router.get('/prd/:projectName', async (req, res) => {
             });
         }
 
-        const docsPath = path.join(projectPath, '.taskmaster', 'docs');
+        const docsPath = req.prdDocsPath;
         
         // Check if docs directory exists
         try {
@@ -721,7 +746,8 @@ router.get('/prd/:projectName', async (req, res) => {
             const prdFiles = [];
 
             for (const file of files) {
-                const filePath = path.join(docsPath, file);
+                const filePath = await resolvePathWithinRoot(docsPath, path.join(docsPath, file)).catch(() => null);
+                if (!filePath) continue;
                 const stats = await fsPromises.stat(filePath);
                 
                 if (stats.isFile() && (file.endsWith('.txt') || file.endsWith('.md'))) {
@@ -794,8 +820,8 @@ router.post('/prd/:projectName', async (req, res) => {
             });
         }
 
-        const docsPath = path.join(projectPath, '.taskmaster', 'docs');
-        const filePath = path.join(docsPath, fileName);
+        const docsPath = req.prdDocsPath;
+        const filePath = req.prdFilePath;
 
         // Ensure docs directory exists
         try {
@@ -863,7 +889,7 @@ router.get('/prd/:projectName/:fileName', async (req, res) => {
             });
         }
 
-        const filePath = path.join(projectPath, '.taskmaster', 'docs', fileName);
+        const filePath = req.prdFilePath;
         
         // Check if file exists
         try {
@@ -928,7 +954,7 @@ router.delete('/prd/:projectName/:fileName', async (req, res) => {
             });
         }
 
-        const filePath = path.join(projectPath, '.taskmaster', 'docs', fileName);
+        const filePath = req.prdFilePath;
         
         // Check if file exists
         try {
@@ -1313,7 +1339,7 @@ router.post('/parse-prd/:projectName', async (req, res) => {
             });
         }
 
-        const prdPath = path.join(projectPath, '.taskmaster', 'docs', fileName);
+        const prdPath = req.prdFilePath;
         
         // Check if PRD file exists
         try {
@@ -1889,14 +1915,14 @@ router.post('/apply-template/:projectName', async (req, res) => {
         }
 
         // Ensure .taskmaster/docs directory exists
-        const docsDir = path.join(projectPath, '.taskmaster', 'docs');
+        const docsDir = req.prdDocsPath;
         try {
             await fsPromises.mkdir(docsDir, { recursive: true });
         } catch (error) {
             console.error('Failed to create docs directory:', error);
         }
 
-        const filePath = path.join(docsDir, fileName);
+        const filePath = req.prdFilePath;
 
         // Write the template content to the file
         try {
