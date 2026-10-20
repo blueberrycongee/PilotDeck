@@ -40,6 +40,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [token, setToken] = useState<string | null>(() => readStoredToken());
   const [isLoading, setIsLoading] = useState(true);
+  const [isLocalSession, setIsLocalSession] = useState(false);
   const [needsSetup, setNeedsSetup] = useState(false);
   const [modelConfiguration, setModelConfiguration] = useState<ModelConfigurationState>({ state: 'loading' });
   const [gatewayRuntime, setGatewayRuntime] = useState<GatewayRuntimeState>({ state: 'unmanaged' });
@@ -52,6 +53,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, []);
 
   const clearSession = useCallback(() => {
+    setIsLocalSession(false);
     setUser(null);
     setToken(null);
     clearStoredToken();
@@ -168,12 +170,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
       if (!statusResponse.ok) throw new Error(AUTH_ERROR_MESSAGES.authStatusCheckFailed);
       if (statusPayload?.authDisabled) {
         if (!statusPayload.token || !statusPayload.user) throw new Error(AUTH_ERROR_MESSAGES.authStatusCheckFailed);
+        setIsLocalSession(true);
         setSession(statusPayload.user, statusPayload.token);
         setNeedsSetup(false);
         await checkOnboardingStatus();
         return;
       }
 
+      setIsLocalSession(false);
       if (statusPayload?.needsSetup) {
         setNeedsSetup(true);
         return;
@@ -210,6 +214,55 @@ export function AuthProvider({ children }: AuthProviderProps) {
   useEffect(() => {
     void checkAuthStatus();
   }, [checkAuthStatus, checkOnboardingStatus]);
+
+  // Refresh only sessions the server explicitly identified as local. Rechecking
+  // status preserves the server's peer/host/origin checks and also recovers after
+  // a sleeping tab wakes with an expired token, without resetting onboarding.
+  useEffect(() => {
+    if (!isLocalSession) return;
+    let cancelled = false;
+    let pending = false;
+    const refresh = async () => {
+      if (pending) return;
+      pending = true;
+      try {
+        const response = await api.auth.status();
+        const payload = await parseJsonSafely<AuthStatusPayload>(response);
+        if (cancelled || !response.ok) return;
+        if (payload?.authDisabled && payload.user && payload.token) {
+          setSession(payload.user, payload.token);
+        } else {
+          clearSession();
+        }
+      } catch {
+        // A transient offline state must not discard the existing session.
+      } finally {
+        pending = false;
+      }
+    };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void refresh();
+    };
+    const timer = window.setInterval(() => void refresh(), 60 * 60 * 1000);
+    window.addEventListener('focus', refresh);
+    window.addEventListener('online', refresh);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener('online', refresh);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [isLocalSession, clearSession, setSession]);
+
+  // Fetch refresh headers update storage in this tab, which does not emit the
+  // browser's storage event. Keep WebSocket consumers on the same session token.
+  useEffect(() => {
+    const syncToken = () => setToken(readStoredToken());
+    window.addEventListener('pilotdeck:auth-token-refreshed', syncToken);
+    return () => window.removeEventListener('pilotdeck:auth-token-refreshed', syncToken);
+  }, []);
 
   const login = useCallback<AuthContextValue['login']>(
     async (username, password) => {

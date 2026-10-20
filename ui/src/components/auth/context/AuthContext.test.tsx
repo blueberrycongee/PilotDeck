@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthProvider, useAuth } from './AuthContext';
 
 const mocks = vi.hoisted(() => ({
+  status: vi.fn(),
   onboardingStatus: vi.fn(),
   runtimeStatus: vi.fn(),
 }));
@@ -16,7 +17,7 @@ vi.mock('../../../constants/config', () => ({
 vi.mock('../../../utils/api', () => ({
   api: {
     auth: {
-      status: vi.fn(async () => ({ ok: true, json: async () => ({ authDisabled: true, token: 'local-token', user: { username: 'local' } }) })),
+      status: mocks.status,
     },
     user: {
       onboardingStatus: mocks.onboardingStatus,
@@ -27,18 +28,46 @@ vi.mock('../../../utils/api', () => ({
 }));
 
 function StateProbe() {
-  const { modelConfiguration } = useAuth();
-  return <div>{modelConfiguration.state}</div>;
+  const { modelConfiguration, token } = useAuth();
+  return <div>{modelConfiguration.state}<span data-testid="token">{token}</span></div>;
 }
 
 describe('AuthContext model configuration state', () => {
   beforeEach(() => {
+    localStorage.clear();
+    mocks.status.mockReset().mockResolvedValue({ ok: true, json: async () => ({ authDisabled: true, token: 'local-token', user: { username: 'local' } }) });
     mocks.onboardingStatus.mockReset();
     mocks.runtimeStatus.mockReset();
   });
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
+  });
+
+  it('refreshes local tokens on a timer and after the tab regains focus', async () => {
+    vi.useFakeTimers();
+    mocks.onboardingStatus.mockResolvedValue({ ok: true, json: async () => ({ configuration: { state: 'needs_configuration' } }) });
+    await act(async () => { render(<AuthProvider><StateProbe /></AuthProvider>); });
+    expect(screen.getByTestId('token').textContent).toBe('local-token');
+    mocks.status.mockResolvedValue({ ok: true, json: async () => ({ authDisabled: true, token: 'renewed-token', user: { username: 'local' } }) });
+    await act(async () => { await vi.advanceTimersByTimeAsync(60 * 60 * 1000); });
+    expect(screen.getByTestId('token').textContent).toBe('renewed-token');
+    expect(localStorage.getItem('auth-token')).toBe('renewed-token');
+    mocks.status.mockResolvedValue({ ok: true, json: async () => ({ authDisabled: true, token: 'wake-token', user: { username: 'local' } }) });
+    await act(async () => { window.dispatchEvent(new Event('focus')); });
+    expect(screen.getByTestId('token').textContent).toBe('wake-token');
+    expect(mocks.onboardingStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('synchronizes refreshed HTTP tokens with context consumers', async () => {
+    mocks.onboardingStatus.mockResolvedValue({ ok: true, json: async () => ({ configuration: { state: 'needs_configuration' } }) });
+    await act(async () => { render(<AuthProvider><StateProbe /></AuthProvider>); });
+    act(() => {
+      localStorage.setItem('auth-token', 'header-token');
+      window.dispatchEvent(new Event('pilotdeck:auth-token-refreshed'));
+    });
+    expect(screen.getByTestId('token').textContent).toBe('header-token');
   });
 
   it('does not fail open when the configuration status request fails', async () => {

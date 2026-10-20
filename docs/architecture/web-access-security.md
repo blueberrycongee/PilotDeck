@@ -49,3 +49,13 @@ Canonical path checks apply to existing files and the ancestors of new files.
 They are an application boundary, not an operating-system sandbox against a local
 process concurrently replacing filesystem entries. This change does not claim a
 complete security audit or filesystem race protection.
+
+### Long-lived local sessions
+
+The browser renews a server-confirmed local session through `/api/auth/status`
+hourly and when it regains focus, comes online, or becomes visible. Each renewal
+still uses the server's local-request checks; a non-local session is not granted
+local access by this lifecycle handling. Renewal updates both token storage and
+React context so WebSocket reconnects use the current token. HTTP refresh headers
+likewise notify same-tab context consumers. Transient offline failures preserve
+the existing session until a later renewal succeeds.

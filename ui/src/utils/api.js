@@ -60,6 +60,7 @@ export const authenticatedFetch = (url, options = {}) => {
     const refreshedToken = response.headers.get('X-Refreshed-Token');
     if (refreshedToken) {
       localStorage.setItem('auth-token', refreshedToken);
+      window.dispatchEvent(new Event('pilotdeck:auth-token-refreshed'));
     }
     if (!suppressServerErrorToast && response.status >= 500) {
       window.dispatchEvent(new CustomEvent('pilotdeck:toast', {

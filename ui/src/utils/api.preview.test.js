@@ -9,6 +9,21 @@ afterEach(() => {
 });
 
 describe('preview request errors', () => {
+  it('announces refreshed session tokens to same-tab consumers', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, {
+      headers: { 'X-Refreshed-Token': 'renewed-token' },
+    })));
+    const refreshed = vi.fn();
+    window.addEventListener('pilotdeck:auth-token-refreshed', refreshed);
+    try {
+      await authenticatedFetch('/api/normal-operation');
+      expect(localStorage.getItem('auth-token')).toBe('renewed-token');
+      expect(refreshed).toHaveBeenCalledOnce();
+    } finally {
+      window.removeEventListener('pilotdeck:auth-token-refreshed', refreshed);
+    }
+  });
+
   it('keeps a preview 500 in the preview area while preserving global toasts for other requests', async () => {
     localStorage.setItem('auth-token', 'fixture-token');
     const fetchMock = vi.fn(async () => new Response(null, {
