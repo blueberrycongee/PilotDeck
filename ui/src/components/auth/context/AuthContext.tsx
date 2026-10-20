@@ -1,5 +1,4 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { IS_PLATFORM, DISABLE_LOCAL_AUTH } from '../../../constants/config';
 import { api } from '../../../utils/api';
 import { AUTH_ERROR_MESSAGES, AUTH_TOKEN_STORAGE_KEY } from '../constants';
 import type {
@@ -166,8 +165,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
       const statusResponse = await api.auth.status();
       const statusPayload = await parseJsonSafely<AuthStatusPayload>(statusResponse);
 
+      if (!statusResponse.ok) throw new Error(AUTH_ERROR_MESSAGES.authStatusCheckFailed);
       if (statusPayload?.authDisabled) {
-        setUser({ username: 'local' });
+        if (!statusPayload.token || !statusPayload.user) throw new Error(AUTH_ERROR_MESSAGES.authStatusCheckFailed);
+        setSession(statusPayload.user, statusPayload.token);
         setNeedsSetup(false);
         await checkOnboardingStatus();
         return;
@@ -180,7 +181,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       setNeedsSetup(false);
 
-      if (!token) {
+      if (!readStoredToken()) {
         return;
       }
 
@@ -204,17 +205,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
     } finally {
       setIsLoading(false);
     }
-  }, [checkOnboardingStatus, clearSession, token]);
+  }, [checkOnboardingStatus, clearSession, setSession]);
 
   useEffect(() => {
-    if (IS_PLATFORM || DISABLE_LOCAL_AUTH) {
-      setUser({ username: DISABLE_LOCAL_AUTH ? 'local-user' : 'platform-user' });
-      setNeedsSetup(false);
-      setIsLoading(true);
-      checkOnboardingStatus().finally(() => setIsLoading(false));
-      return;
-    }
-
     void checkAuthStatus();
   }, [checkAuthStatus, checkOnboardingStatus]);
 

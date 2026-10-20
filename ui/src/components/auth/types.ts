@@ -16,6 +16,8 @@ export type AuthSessionPayload = {
 };
 
 export type AuthStatusPayload = {
+  token?: string;
+  user?: AuthUser;
   needsSetup?: boolean;
   authDisabled?: boolean;
 };
