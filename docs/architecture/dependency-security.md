@@ -32,3 +32,17 @@ regression suites passed with this dependency graph. This independent dependency
 branch retains the pre-existing UI React type conflict; its fix is isolated in
 `fix/bug-12-react-type-isolation`. Registry advisories change over time, so rerun
 `pnpm audit --prod --json` when reviewing or merging this branch.
+
+### Preparation verification — 2026-10-20
+
+Rechecked with Node 22.19.0 and pnpm 10.32.1 using a frozen install. The
+standalone dependency candidate passes the root TypeScript check. Linux Sharp
+PNG/resize/WebP processing, CSV parsing, Undici Response handling and MCP client
+loading also pass without external service calls. The fresh production audit
+still reports the seven advisories listed above and exits nonzero.
+
+The combined local candidate additionally includes the independent React type
+isolation fix; its complete UI typecheck and production Vite build pass. This
+is not a claim that the dependency branch alone fixes the existing web React
+18/CLI React 19 declaration conflict. macOS/Windows native packaging and complete
+interactive PDF/upload/image regression remain unverified in this preparation.
