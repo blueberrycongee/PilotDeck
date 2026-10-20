@@ -1,4 +1,4 @@
-import { withTranscriptFileLock } from "../storage/TranscriptFileLock.js";
+import { registerTranscriptWriter, withTranscriptFileLock } from "../storage/TranscriptFileLock.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, appendFile, open } from "node:fs/promises";
 import { basename, dirname, join, relative } from "node:path";
@@ -157,7 +157,8 @@ export class JsonlTranscriptWriter implements AgentTranscriptWriter {
   private enqueueEntry(entry: AgentTranscriptEntry, allocateIdentity = true): Promise<void> {
     if (this.closed) return Promise.resolve();
     const captured = JSON.stringify(entry);
-      const operation = this.writeChain.then(async () => {
+    const release = registerTranscriptWriter(this.options.path);
+    const operation = this.writeChain.then(async () => {
       await mkdir(dirname(this.options.path), { recursive: true, mode: 0o700 });
       await withTranscriptFileLock(this.options.path, async () => {
         const tail = await this.prepareTail();
@@ -172,7 +173,7 @@ export class JsonlTranscriptWriter implements AgentTranscriptWriter {
         this.sequence = Math.max(this.sequence, record.sequence);
         this.lastEntryId = record.entryId ?? this.lastEntryId;
       });
-    });
+    }).finally(release);
     // Report this append's failure to its caller without poisoning later writes.
     this.writeChain = operation.catch(() => undefined);
     return operation;

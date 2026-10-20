@@ -517,6 +517,12 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
 
+  if (command === "session") {
+    const { runSessionStorageCli } = await import("./commands/sessionStorage.js");
+    await runSessionStorageCli(argv.slice(1));
+    return;
+  }
+
   if (command === "chat") {
     const { runChatSearchCli } = await import("./commands/chatSearch.js");
     await runChatSearchCli(argv.slice(1));

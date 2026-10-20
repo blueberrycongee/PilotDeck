@@ -1,7 +1,23 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { setTimeout } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
+
+const openWriters = new Map<string, number>();
+
+export function registerTranscriptWriter(path: string): () => void {
+  path = resolve(path);
+  openWriters.set(path, (openWriters.get(path) ?? 0) + 1);
+  return () => {
+    const count = (openWriters.get(path) ?? 1) - 1;
+    if (count === 0) openWriters.delete(path);
+    else openWriters.set(path, count);
+  };
+}
+
+export function hasOpenTranscriptWriter(path: string): boolean {
+  return openWriters.has(resolve(path));
+}
 
 /** Shared by append, replacement and maintenance, including separate PD processes. */
 export async function withTranscriptFileLock<T>(path: string, action: () => Promise<T>): Promise<T> {

@@ -1,5 +1,6 @@
 /** Atomically remove the latest user turn from a normal web-session transcript. */
 
+import { withTranscriptFileLock } from "../../session/storage/TranscriptFileLock.js";
 import { randomUUID } from "node:crypto";
 import {
   readFileSync,
@@ -427,6 +428,19 @@ export async function replaceLastWebSessionTurn(
   input: WebReplaceLastTurnInput,
   options: ReplaceLastWebSessionTurnOptions,
 ): Promise<WebReplaceLastTurnResult> {
+  if (typeof input.sessionKey !== "string" || !input.sessionKey.trim()
+    || typeof input.expectedTurnId !== "string" || !input.expectedTurnId.trim()
+    || typeof input.replacementTurnId !== "string" || !input.replacementTurnId.trim()) {
+    return replaceLastWebSessionTurnLocked(input, options);
+  }
+  const { transcriptPath } = replacementPaths(input.sessionKey, input.projectKey ?? options.projectRoot, options.pilotHome);
+  return withTranscriptFileLock(transcriptPath, () => replaceLastWebSessionTurnLocked(input, options));
+}
+
+async function replaceLastWebSessionTurnLocked(
+  input: WebReplaceLastTurnInput,
+  options: ReplaceLastWebSessionTurnOptions,
+): Promise<WebReplaceLastTurnResult> {
   if (
     typeof input.sessionKey !== "string"
     || !input.sessionKey.trim()
@@ -541,6 +555,20 @@ export async function replaceLastWebSessionTurn(
 }
 
 export async function finalizeLastWebSessionTurnReplacement(
+  input: WebFinalizeLastTurnReplacementInput,
+  options: ReplaceLastWebSessionTurnOptions,
+): Promise<WebFinalizeLastTurnReplacementResult> {
+  if (typeof input.sessionKey !== "string" || !input.sessionKey.trim()
+    || typeof input.transactionId !== "string" || !input.transactionId.trim()
+    || (input.action !== "commit" && input.action !== "rollback")) {
+    return finalizeLastWebSessionTurnReplacementLocked(input, options);
+  }
+  validateTransactionId(input.transactionId);
+  const { transcriptPath } = replacementPaths(input.sessionKey, input.projectKey ?? options.projectRoot, options.pilotHome);
+  return withTranscriptFileLock(transcriptPath, () => finalizeLastWebSessionTurnReplacementLocked(input, options));
+}
+
+async function finalizeLastWebSessionTurnReplacementLocked(
   input: WebFinalizeLastTurnReplacementInput,
   options: ReplaceLastWebSessionTurnOptions,
 ): Promise<WebFinalizeLastTurnReplacementResult> {
