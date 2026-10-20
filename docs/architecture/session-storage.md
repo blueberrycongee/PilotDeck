@@ -58,5 +58,5 @@ that flag. To downgrade to an older reader, stop all writers and restore the
 pre-compression backup first. The old reader cannot decode compressed records.
 
 The scan budget bounds candidate files inspected, not directory enumeration or
-a hard wall-clock duration. Directory entries sort with a slash suffix so the
+a hard wall-clock duration. Project and transcript directory entries sort with the platform separator so the
 resumable cursor covers main transcripts and same-stem subagent directories.

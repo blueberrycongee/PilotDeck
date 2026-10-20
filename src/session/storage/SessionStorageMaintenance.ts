@@ -1,7 +1,7 @@
 import { lstat, open, readdir, readFile, writeFile, rename, rm, utimes } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { encodeTranscriptLine } from "../transcript/TranscriptStorageCodec.js";
 import { hasOpenTranscriptWriter, withTranscriptFileLock } from "./TranscriptFileLock.js";
@@ -45,7 +45,10 @@ export async function maintainSessionStorage(options: {
     if (error.code === "ENOENT") return [];
     throw error;
   });
-  for (const project of projectDirs.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) {
+  // The cursor compares complete paths. Include the directory separator so
+  // prefix names (for example "a" and "a-b") use that same ordering.
+  const projectKey = (entry: typeof projectDirs[number]): string => entry.name + sep;
+  for (const project of projectDirs.sort((a, b) => projectKey(a) < projectKey(b) ? -1 : projectKey(a) > projectKey(b) ? 1 : 0)) {
     if (!project.isDirectory()) continue;
     const chats = join(projects, project.name, "chats");
     for await (const path of transcriptFiles(chats)) {
@@ -130,7 +133,7 @@ async function* transcriptFiles(directory: string): AsyncGenerator<string> {
     if (error.code === "ENOENT") return [];
     throw error;
   });
-  const sortKey = (entry: typeof entries[number]): string => entry.name + (entry.isDirectory() ? "/" : "");
+  const sortKey = (entry: typeof entries[number]): string => entry.name + (entry.isDirectory() ? sep : "");
   for (const entry of entries.sort((a, b) => sortKey(a) < sortKey(b) ? -1 : sortKey(a) > sortKey(b) ? 1 : 0)) {
     if (entry.isFile() && entry.name.endsWith(".jsonl")) yield join(directory, entry.name);
     // Session sidechains live at chats/<session>/subagents/*.jsonl.
