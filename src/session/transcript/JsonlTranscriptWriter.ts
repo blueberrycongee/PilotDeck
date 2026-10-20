@@ -1,3 +1,4 @@
+import { withTranscriptFileLock } from "../storage/TranscriptFileLock.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, appendFile, open } from "node:fs/promises";
 import { basename, dirname, join, relative } from "node:path";
@@ -156,26 +157,28 @@ export class JsonlTranscriptWriter implements AgentTranscriptWriter {
   private enqueueEntry(entry: AgentTranscriptEntry, allocateIdentity = true): Promise<void> {
     if (this.closed) return Promise.resolve();
     const captured = JSON.stringify(entry);
-    const operation = this.writeChain.then(async () => {
+      const operation = this.writeChain.then(async () => {
       await mkdir(dirname(this.options.path), { recursive: true, mode: 0o700 });
-      await this.prepareTail();
-      const record = JSON.parse(captured) as AgentTranscriptEntry;
-      if (allocateIdentity) {
-        record.sequence = this.sequence + 1;
-        record.parentEntryId = this.lastEntryId;
-      }
-      const flush = record.type === "control_boundary" &&
-        (record.boundary.kind === "restore" || (record.boundary.kind === "compact" && record.boundary.subtype === "compact_boundary"));
-      await appendFile(this.options.path, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600, flush });
-      this.sequence = Math.max(this.sequence, record.sequence);
-      this.lastEntryId = record.entryId ?? this.lastEntryId;
+      await withTranscriptFileLock(this.options.path, async () => {
+        const tail = await this.prepareTail();
+        const record = JSON.parse(captured) as AgentTranscriptEntry;
+        if (allocateIdentity) {
+          record.sequence = Math.max(this.sequence, tail.sequence) + 1;
+          record.parentEntryId = tail.lastEntryId ?? this.lastEntryId;
+        }
+        const flush = record.type === "control_boundary" &&
+          (record.boundary.kind === "restore" || (record.boundary.kind === "compact" && record.boundary.subtype === "compact_boundary"));
+        await appendFile(this.options.path, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600, flush });
+        this.sequence = Math.max(this.sequence, record.sequence);
+        this.lastEntryId = record.entryId ?? this.lastEntryId;
+      });
     });
-    // Report this append to its caller while allowing subsequent writes to run.
+    // Report this append's failure to its caller without poisoning later writes.
     this.writeChain = operation.catch(() => undefined);
     return operation;
   }
 
-  private async prepareTail(): Promise<void> {
+  private async prepareTail(): Promise<AgentTranscriptWriterState> {
     const file = await open(this.options.path, "a+", 0o600);
     try {
       const { size } = await file.stat();
@@ -188,6 +191,31 @@ export class JsonlTranscriptWriter implements AgentTranscriptWriter {
           await file.appendFile("\n");
         }
       }
+      // Read identity from the physical tail while holding the same lock used
+      // for append/replacement. Encoded records keep these fields in plain JSON.
+      let position = size;
+      let suffix = Buffer.alloc(0);
+      while (position > 0) {
+        const length = Math.min(position, 64 * 1024);
+        position -= length;
+        const buffer = Buffer.alloc(length);
+        await file.read(buffer, 0, length, position);
+        const data = Buffer.concat([buffer, suffix]);
+        const start = position === 0 ? 0 : data.indexOf(0x0a) + 1;
+        if (start > 0 || position === 0) {
+          const lines = data.subarray(start).toString("utf8").split("\n");
+          for (let index = lines.length - 1; index >= 0; index--) {
+            try {
+              const record = JSON.parse(lines[index]);
+              if (Number.isSafeInteger(record.sequence) && record.sequence >= 0) {
+                return { sequence: record.sequence, lastEntryId: typeof record.entryId === "string" ? record.entryId : null };
+              }
+            } catch { /* Ignore crash debris, retaining it for diagnostics. */ }
+          }
+        }
+        suffix = start > 0 ? data.subarray(0, start - 1) : data;
+      }
+      return { sequence: 0, lastEntryId: null };
     } finally {
       await file.close();
     }
