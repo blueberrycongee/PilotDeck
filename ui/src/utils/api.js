@@ -1,5 +1,4 @@
 import { postFormDataWithProgress } from './uploadFormData';
-import { IS_PLATFORM } from "../constants/config";
 
 const normalizePathForUrl = (value) => String(value || '').replace(/\\/g, '/');
 
@@ -47,7 +46,7 @@ export const authenticatedFetch = (url, options = {}) => {
     defaultHeaders['Content-Type'] = 'application/json';
   }
 
-  if (!IS_PLATFORM && token) {
+  if (token) {
     defaultHeaders['Authorization'] = `Bearer ${token}`;
   }
 

@@ -1,4 +1,3 @@
-import { IS_PLATFORM } from '../constants/config';
 
 /** Shared transport for chat and workspace uploads; completion awaits the HTTP response. */
 export function postFormDataWithProgress({
@@ -42,7 +41,7 @@ export function postFormDataWithProgress({
     xhr.onabort = () => { cleanup(); reject(new DOMException('Upload aborted', 'AbortError')); };
     xhr.open('POST', url);
     const token = localStorage.getItem('auth-token');
-    if (!IS_PLATFORM && token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
     signal.addEventListener('abort', abort, { once: true });
     try { xhr.send(formData); } catch (error) { cleanup(); reject(error); }
   });

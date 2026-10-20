@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { postFormDataWithProgress } from './uploadFormData';
-vi.mock('../constants/config', () => ({ IS_PLATFORM: false }));
+vi.mock('../constants/config', () => ({ IS_PLATFORM: true }));
 class FakeXhr {
   static latest: FakeXhr;
   upload: any = {};
